@@ -1,8 +1,10 @@
+import minimist from 'minimist';
+
 /**
- * A un-blocking logging function.
+ * A simple logging function.
  * @param {...any} args arguments.
  */
-export async function log(...args) {
+export function log(...args) {
     const padLeft = (value = 0, length = 2) => `${value}`.padStart(length, '0');
     const now = new Date();
     const year = padLeft(now.getFullYear(), 4);
@@ -14,4 +16,11 @@ export async function log(...args) {
     const ms = padLeft(now.getMilliseconds(), 3);
     const time = `${year}/${month}/${day} ${hour}:${minute}:${second}.${ms}`;
     console.log(`${time} ${args.join(' ')}`);
+}
+
+/**
+ * @returns all arguments passed into the application.
+ */
+export function args() {
+    return minimist(process.argv.slice(2));
 }

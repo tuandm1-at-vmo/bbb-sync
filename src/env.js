@@ -1,3 +1,4 @@
+export const APP = process.env.APP || 'bbb-sync';
 export const ENV = process.env.ENV || '';
 export const MSSQL_HOST = process.env.MSSQL_HOST || 'localhost';
 export const MSSQL_PORT = Number(process.env.MSSQL_PORT) || 1433;

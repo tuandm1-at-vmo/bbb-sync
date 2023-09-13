@@ -3,17 +3,41 @@ import fetch from 'node-fetch';
 
 import { mongoDb, sqlPool } from './db.js';
 import * as env from './env.js';
-import { log } from './util.js';
+import { args, log } from './util.js';
 
 const SYNCHRONIZED_BICYCLE_FILE = 'data/ok.json';
 const FAILED_BICYCLE_FILE = 'data/err.json';
-const START_YEAR = 2023;
+
+/**
+ * @returns the query body excluding SELECT, ORDER BY, and OFFSET clauses.
+ */
+function createQueryBody(startYear = 0, endYear = 0) {
+    const startYearFilter = startYear > 0 ? `b.year_id >= ${startYear} and` : '';
+    const endYearFilter = endYear > 0 ? `b.year_id <= ${endYear} and` : '';
+    return `
+        from bicycle b
+        left join bicycle_brand bb on b.brand_id = bb.id
+        left join bicycle_model bm on b.model_id = bm.id
+        left join bicycle_type bt on b.type_id = bt.id
+        where
+            b.is_delete = 0 and
+            bb.is_delete = 0 and
+            bm.is_delete = 0 and
+            bt.is_delete = 0 and
+            b.retail_price is not null and
+            b.retail_price > 0.0001 and
+            ${startYearFilter}
+            ${endYearFilter}
+            1 = 1
+    `;
+}
 
 /**
  * Returns the promises for bicycle retrievals paginatedly.
+ * @param {String} queryBody the conditions for filtering.
  * @param {Number} total the number of bicycles need to be fetched.
  */
-async function prepareFetchingAllBicycles(total = 0) {
+async function prepareFetchingAllBicycles(queryBody = '', total = 0) {
     const maxConnections = 30;
     const pageSize = 50;
     const fetchers = [];
@@ -27,7 +51,7 @@ async function prepareFetchingAllBicycles(total = 0) {
             pools.push(pool);
         }
         const offset = page * pageSize;
-        fetchers.push(currentPool.query`
+        fetchers.push(currentPool.query(`
             select
                 b.id as id,
                 b.name as name,
@@ -38,21 +62,10 @@ async function prepareFetchingAllBicycles(total = 0) {
                 b.year_id as year,
                 b.retail_price as msrp,
                 bt.name as type
-            from bicycle b
-            left join bicycle_brand bb on b.brand_id = bb.id
-            left join bicycle_model bm on b.model_id = bm.id
-            left join bicycle_type bt on b.type_id = bt.id
-            where
-                b.is_delete = 0 and
-                bb.is_delete = 0 and
-                bm.is_delete = 0 and
-                bt.is_delete = 0 and
-                b.retail_price is not null and
-                b.active = 1 and
-                b.year_id >= ${START_YEAR}
+            ${queryBody}
             order by b.id desc
             offset ${offset} rows fetch next ${pageSize} rows only
-        `);
+        `));
     }
     const close = async () => {
         for (const p of pools) {
@@ -74,28 +87,22 @@ async function prepareFetchingAllBicycles(total = 0) {
 /**
  * Retrieves all active and not-deleted bicycles from BBB's SQL Server.
  */
-async function fetchAllBicycles() {
+async function fetchAllBicycles(fromYear = 0, toYear = 0) {
+    const queryBody = createQueryBody(fromYear, toYear);
+    log('counting records for years from', fromYear, 'to', toYear);
+
     const pool = await sqlPool();
-    const count = (await pool.query`
+    const count = (await pool.query(`
         select
             count(b.id) as total
-        from bicycle b
-        left join bicycle_brand bb on b.brand_id = bb.id
-        left join bicycle_model bm on b.model_id = bm.id
-        left join bicycle_type bt on b.type_id = bt.id
-        where
-            b.is_delete = 0 and
-            bb.is_delete = 0 and
-            bm.is_delete = 0 and
-            bt.is_delete = 0 and
-            b.active = 1 and
-            b.retail_price is not null and
-            b.year_id >= ${START_YEAR}
-    `).recordset[0];
+        ${queryBody}
+    `)).recordset[0];
     await pool.close();
 
     const total = Number(count['total']);
-    const { fetchers, close } = await prepareFetchingAllBicycles(total);
+    log('fetching', total, 'records');
+
+    const { fetchers, close } = await prepareFetchingAllBicycles(queryBody, total);
     try {
         const bicycles = (await Promise.all(fetchers))
             .flatMap((res) => res.recordset.map((rec) => ({
@@ -109,7 +116,7 @@ async function fetchAllBicycles() {
                 msrp: Number(rec['msrp']),
                 type: rec['type'],
             })));
-        log(bicycles.length, 'fetched');
+        log(bicycles.length, 'records fetched');
         return bicycles;
     } finally {
         await close();
@@ -156,9 +163,9 @@ async function synchronizeBicycles(bicycles = [{
                     model: bicycle.model,
                     year: bicycle.year,
                     // msrp: bicycle.msrp, // TODO: floating point searching issue
-                    type: bicycle.type,
+                    // type: bicycle.type,
                 });
-                const response = await fetch(`${env.BBB_ML_BASE_URL}/api/sync-bicycle-data?env=${env.ENV}`, {
+                const response = await fetch(`${env.BBB_ML_BASE_URL}/api/sync-bicycle-data?env=${env.ENV}&utm_source=${env.APP}`, {
                     method: 'POST',
                     body: JSON.stringify({
                         make: bicycle.brand,
@@ -173,11 +180,12 @@ async function synchronizeBicycles(bicycles = [{
                     }),
                     headers: {
                         'Content-Type': 'application/json',
+                        'User-Agent': `bicyclebluebook (project: ${env.APP}, environment: ${env.ENV})`,
                         [env.BBB_ML_SECRET_HEADER]: env.BBB_ML_SECRET_HEADER_VALUE,
                     },
                 });
                 if (response.status >= 400) {
-                    log(bicycle.id, 'error', response.statusText);
+                    log(bicycle.id, 'error', response.status, await response.text());
                     return res(bicycle, false);
                 }
                 return res(bicycle);
@@ -195,7 +203,11 @@ async function synchronizeBicycles(bicycles = [{
     }
 }
 
-log('env', env.ENV).then(fetchAllBicycles).then(async (bicycles) => {
+
+fetchAllBicycles(
+    Number(args()['from']),
+    Number(args()['to']),
+).then(async (bicycles) => {
     let synchronizedBicycleIds = [];
     try {
         synchronizedBicycleIds = JSON.parse(fs.readFileSync(SYNCHRONIZED_BICYCLE_FILE));

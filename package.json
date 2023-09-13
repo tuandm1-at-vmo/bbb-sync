@@ -7,6 +7,7 @@
     "sync:production": "node -r dotenv/config src/sync.js dotenv_config_path=.env.production"
   },
   "dependencies": {
+    "minimist": "^1.2.8",
     "mongodb": "^5.6.0",
     "mssql": "^9.1.1",
     "node-fetch": "^3.3.1"

@@ -2,11 +2,14 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "index": "node -r dotenv/config src/idx.js",
     "sync": "node -r dotenv/config src/sync.js",
     "sync:staging": "node -r dotenv/config src/sync.js dotenv_config_path=.env.staging",
     "sync:production": "node -r dotenv/config src/sync.js dotenv_config_path=.env.production"
   },
   "dependencies": {
+    "@opensearch-project/opensearch": "^2.3.1",
+    "aws-sdk": "^2.1454.0",
     "mongodb": "^5.6.0",
     "mssql": "^9.1.1",
     "node-fetch": "^3.3.1"
